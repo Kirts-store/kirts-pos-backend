@@ -20,22 +20,48 @@ app.get('/health', (req, res) => {
 });
 
 // ============================================
-// PRODUCTS
+// PRODUCTS (with better error logging)
 // ============================================
 app.get('/products', async (req, res) => {
-    const since = req.query.since || 0;
+    console.log('--- /products route was called ---');
     
+    // Log the environment variables to see if they exist (without revealing the full key)
+    console.log('SUPABASE_URL exists?', !!process.env.SUPABASE_URL);
+    console.log('SUPABASE_ANON_KEY exists?', !!process.env.SUPABASE_ANON_KEY);
+
     try {
-        const { data, error } = await supabase
+        // First, try to fetch a list of tables to see if we can connect
+        const { data: tableCheck, error: tableError } = await supabase
             .from('products')
-            .select('*')
-            .gte('last_updated', since);
+            .select('count', { count: 'exact', head: true });
+
+        if (tableError) {
+            console.error('Table access error:', tableError.message);
+            return res.status(500).json({ 
+                error: 'Database table access failed', 
+                details: tableError.message 
+            });
+        }
+
+        // If we get here, the table is accessible. Now fetch the products.
+        const { data: products, error: productsError } = await supabase
+            .from('products')
+            .select('*');
         
-        if (error) throw error;
-        
-        res.json({ products: data, timestamp: Date.now() });
+        if (productsError) {
+            console.error('Product fetch error:', productsError.message);
+            return res.status(500).json({ 
+                error: 'Product fetch failed', 
+                details: productsError.message 
+            });
+        }
+
+        console.log(`Successfully fetched ${products?.length || 0} products.`);
+        res.json({ products: products, count: products?.length || 0 });
+
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error('Unexpected error in /products route:', error);
+        res.status(500).json({ error: 'Internal server error', details: error.message });
     }
 });
 
