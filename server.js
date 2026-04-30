@@ -97,4 +97,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`✅ KIRTS POS Backend running on port ${PORT}`);
 });
-});
