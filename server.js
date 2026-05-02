@@ -14,7 +14,7 @@ const supabase = createClient(
 
 // Health check
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok' });
+    res.json({ status: 'ok', timestamp: Date.now() });
 });
 
 // Test endpoint
@@ -25,20 +25,79 @@ app.get('/test', (req, res) => {
 // Products
 app.get('/products', async (req, res) => {
     try {
-        const { data } = await supabase.from('products').select('*');
+        const { data, error } = await supabase.from('products').select('*');
+        if (error) throw error;
         res.json({ products: data });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-// SYNC - Simple version
+// SYNC ENDPOINT - IMPORTANT
 app.post('/sync', async (req, res) => {
-    console.log('Sync endpoint hit');
-    console.log('Body:', req.body);
+    console.log('📥 Sync endpoint hit');
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
     
     try {
-        res.json({ success: true, message: 'Sync received' });
+        const { transactions } = req.body;
+        
+        if (!transactions || transactions.length === 0) {
+            return res.json({ success: true, message: 'Nothing to sync' });
+        }
+        
+        // Process each transaction
+        for (const tx of transactions) {
+            const { error } = await supabase
+                .from('transactions')
+                .upsert({
+                    id: tx.id,
+                    transaction_number: tx.transaction_number,
+                    subtotal: tx.subtotal,
+                    tax: tx.tax,
+                    total: tx.total,
+                    payment_method: tx.payment_method,
+                    register_id: tx.register_id || 'REG-01',
+                    created_at: tx.created_at,
+                    synced_at: Date.now()
+                });
+            
+            if (error) {
+                console.error('Supabase error:', error);
+                throw error;
+            }
+            console.log(`✅ Synced: ${tx.transaction_number}`);
+        }
+        
+        res.json({ success: true, message: `Synced ${transactions.length} transactions` });
+    } catch (error) {
+        console.error('Sync error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Transactions report
+app.get('/transactions', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('transactions')
+            .select('*')
+            .order('created_at', { ascending: false });
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Daily report
+app.get('/reports/daily', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('transactions')
+            .select('*')
+            .order('created_at', { ascending: false });
+        if (error) throw error;
+        res.json(data);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -46,5 +105,8 @@ app.post('/sync', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`✅ Server running on port ${PORT}`);
+    console.log(`   GET /health`);
+    console.log(`   GET /products`);
+    console.log(`   POST /sync`);
 });
