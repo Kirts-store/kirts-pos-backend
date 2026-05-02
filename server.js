@@ -46,7 +46,6 @@ app.get('/products', async (req, res) => {
 // ============================================
 app.post('/sync', async (req, res) => {
     console.log('📥 Sync request received');
-    console.log('Body:', JSON.stringify(req.body, null, 2));
     
     try {
         const { transactions } = req.body;
@@ -66,6 +65,7 @@ app.post('/sync', async (req, res) => {
                     total: tx.total,
                     payment_method: tx.payment_method,
                     register_id: tx.register_id || 'REG-01',
+                    user_id: tx.user_id || 'system',
                     created_at: tx.created_at,
                     synced_at: Date.now()
                 });
