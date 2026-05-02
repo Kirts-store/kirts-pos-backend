@@ -134,31 +134,40 @@ app.get('/reports/top-products', async (req, res) => {
 // SYNC ENDPOINT (For POS registers to upload)
 // ============================================
 app.post('/sync', async (req, res) => {
-    const { transactions, transaction_items, payouts } = req.body;
+    const { transactions } = req.body;
+    
+    console.log('📥 Received sync request with:', transactions);
+    
+    if (!transactions || transactions.length === 0) {
+        return res.json({ success: true, message: 'Nothing to sync' });
+    }
     
     try {
-        if (transactions && transactions.length > 0) {
+        for (const transaction of transactions) {
+            // Insert or update transaction
             const { error: txError } = await supabase
                 .from('transactions')
-                .upsert(transactions, { onConflict: 'id' });
-            if (txError) throw txError;
+                .upsert({
+                    id: transaction.id,
+                    transaction_number: transaction.transaction_number,
+                    subtotal: transaction.subtotal,
+                    tax: transaction.tax,
+                    total: transaction.total,
+                    payment_method: transaction.payment_method,
+                    register_id: transaction.register_id || 'REG-01',
+                    created_at: transaction.created_at,
+                    synced_at: Date.now()
+                });
+            
+            if (txError) {
+                console.error('Transaction error:', txError);
+                throw txError;
+            }
+            
+            console.log(`✅ Synced transaction: ${transaction.transaction_number}`);
         }
         
-        if (transaction_items && transaction_items.length > 0) {
-            const { error: itemsError } = await supabase
-                .from('transaction_items')
-                .upsert(transaction_items, { onConflict: 'id' });
-            if (itemsError) throw itemsError;
-        }
-        
-        if (payouts && payouts.length > 0) {
-            const { error: payoutError } = await supabase
-                .from('payouts')
-                .upsert(payouts, { onConflict: 'id' });
-            if (payoutError) throw payoutError;
-        }
-        
-        res.json({ success: true, message: 'Sync completed' });
+        res.json({ success: true, message: `Synced ${transactions.length} transactions` });
     } catch (error) {
         console.error('Sync error:', error);
         res.status(500).json({ error: error.message });
