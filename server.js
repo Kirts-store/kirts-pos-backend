@@ -130,6 +130,11 @@ app.get('/reports/top-products', async (req, res) => {
     }
 });
 
+// Test endpoint
+app.get('/test', (req, res) => {
+    res.json({ message: 'Backend is working' });
+});
+
 // ============================================
 // SYNC ENDPOINT (For POS registers to upload)
 // ============================================
