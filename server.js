@@ -1,6 +1,7 @@
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const cors = require('cors');
+require('dotenv').config();
 
 const app = express();
 app.use(cors());
@@ -20,70 +21,117 @@ app.get('/health', (req, res) => {
 });
 
 // ============================================
-// PRODUCTS (with better error logging)
+// PRODUCTS
 // ============================================
 app.get('/products', async (req, res) => {
-    console.log('--- /products route was called ---');
-    
-    // Log the environment variables to see if they exist (without revealing the full key)
-    console.log('SUPABASE_URL exists?', !!process.env.SUPABASE_URL);
-    console.log('SUPABASE_ANON_KEY exists?', !!process.env.SUPABASE_ANON_KEY);
-
     try {
-        // First, try to fetch a list of tables to see if we can connect
-        const { data: tableCheck, error: tableError } = await supabase
-            .from('products')
-            .select('count', { count: 'exact', head: true });
-
-        if (tableError) {
-            console.error('Table access error:', tableError.message);
-            return res.status(500).json({ 
-                error: 'Database table access failed', 
-                details: tableError.message 
-            });
-        }
-
-        // If we get here, the table is accessible. Now fetch the products.
-        const { data: products, error: productsError } = await supabase
+        const { data, error } = await supabase
             .from('products')
             .select('*');
-        
-        if (productsError) {
-            console.error('Product fetch error:', productsError.message);
-            return res.status(500).json({ 
-                error: 'Product fetch failed', 
-                details: productsError.message 
-            });
-        }
-
-        console.log(`Successfully fetched ${products?.length || 0} products.`);
-        res.json({ products: products, count: products?.length || 0 });
-
+        if (error) throw error;
+        res.json({ products: data, timestamp: Date.now() });
     } catch (error) {
-        console.error('Unexpected error in /products route:', error);
-        res.status(500).json({ error: 'Internal server error', details: error.message });
+        res.status(500).json({ error: error.message });
     }
 });
 
-// ============================================
-// USERS
-// ============================================
-app.get('/users', async (req, res) => {
+app.put('/products/:id', async (req, res) => {
+    const { id } = req.params;
+    const { stock_quantity } = req.body;
     try {
-        const { data, error } = await supabase
-            .from('users')
-            .select('id, username, pin, full_name, role, is_active');
-        
+        const { error } = await supabase
+            .from('products')
+            .update({ stock_quantity, last_updated: Date.now() })
+            .eq('id', id);
         if (error) throw error;
-        
-        res.json({ users: data });
+        res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
 // ============================================
-// SYNC
+// TRANSACTIONS (SALES)
+// ============================================
+app.get('/transactions', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('transactions')
+            .select('*')
+            .order('created_at', { ascending: false });
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/reports/daily', async (req, res) => {
+    try {
+        const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+        const { data, error } = await supabase
+            .from('transactions')
+            .select('total, created_at, register_id')
+            .gte('created_at', thirtyDaysAgo);
+        
+        if (error) throw error;
+        
+        const daily = {};
+        data.forEach(tx => {
+            const day = new Date(tx.created_at).toISOString().split('T')[0];
+            if (!daily[day]) {
+                daily[day] = { total_sales: 0, transaction_count: 0, registers: new Set() };
+            }
+            daily[day].total_sales += tx.total;
+            daily[day].transaction_count++;
+            daily[day].registers.add(tx.register_id);
+        });
+        
+        const result = Object.entries(daily).map(([date, values]) => ({
+            date,
+            total_sales: values.total_sales,
+            transaction_count: values.transaction_count,
+            active_registers: values.registers.size
+        })).sort((a, b) => b.date.localeCompare(a.date));
+        
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/reports/top-products', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('transaction_items')
+            .select('product_id, quantity, total_price, products(name)')
+            .limit(100);
+        
+        if (error) throw error;
+        
+        const productSales = {};
+        data.forEach(item => {
+            const name = item.products?.name || item.product_id;
+            if (!productSales[name]) {
+                productSales[name] = { quantity: 0, revenue: 0 };
+            }
+            productSales[name].quantity += item.quantity;
+            productSales[name].revenue += item.total_price;
+        });
+        
+        const result = Object.entries(productSales)
+            .map(([name, values]) => ({ name, ...values }))
+            .sort((a, b) => b.revenue - a.revenue)
+            .slice(0, 10);
+        
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// SYNC ENDPOINT (For POS registers to upload)
 // ============================================
 app.post('/sync', async (req, res) => {
     const { transactions, transaction_items, payouts } = req.body;
@@ -110,7 +158,39 @@ app.post('/sync', async (req, res) => {
             if (payoutError) throw payoutError;
         }
         
-        res.json({ success: true });
+        res.json({ success: true, message: 'Sync completed' });
+    } catch (error) {
+        console.error('Sync error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// PAYOUTS
+// ============================================
+app.get('/payouts', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('payouts')
+            .select('*')
+            .order('created_at', { ascending: false });
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// USERS
+// ============================================
+app.get('/users', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('users')
+            .select('id, username, full_name, role, is_active');
+        if (error) throw error;
+        res.json({ users: data });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -122,4 +202,5 @@ app.post('/sync', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`✅ KIRTS POS Backend running on port ${PORT}`);
+    console.log(`📊 Remote dashboard available at: https://kirts-pos-backend.onrender.com/reports/daily`);
 });
